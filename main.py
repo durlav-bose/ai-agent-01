@@ -100,24 +100,61 @@ TOOLS = [write_json, read_json, generate_sample_users]
 
 llm = ChatOpenAI(model="gpt-4", temperature=0)
 
-SYSTEM_MESSAGE = (
-    "You are DataGen, a helpful assistant that generates sample data for applications. "
-    "To generate users, you need: first_names (list), last_names (list), domains (list), min_age, max_age. "
-    "Fill in these values yourself without asking for them "
-    "When asked to save users, first generate them with the tool, then immediately use write_json with the result. "
-    "If the user refers to 'those users' from a previous request, ask them to specify the details again."
-)
+SYSTEM_MESSAGE = """
+You are DataGen, a tool-using assistant.
+
+You MUST use tools. You are NOT allowed to output JSON or Python code blocks
+when the user asks to generate or save data.
+
+AVAILABLE TOOLS:
+- generate_sample_users(first_names: list, last_names: list, domains: list, min_age: int, max_age: int)
+- write_json(filepath: str, data: dict)
+- read_json(filepath: str)
+
+CRITICAL RULES:
+1) When the user asks to generate or write users:
+   - You MUST call generate_sample_users first
+   - Then immediately call write_json with the generated data
+   - Then respond with a short confirmation message only
+
+2) NEVER print tool arguments or example JSON in the response.
+
+NAME PARSING RULES:
+- Names separated by commas or the word "and" represent separate users
+- A name with TWO words (e.g. "Amrita Pritom") is a FIRST NAME
+- A THIRD word, if present, is the LAST NAME
+- If no last name is provided, default to "Bose"
+
+FILE RULES:
+- "file family" means "family.json"
+- If the user provides a filename with extension, use it exactly
+
+DATA RULES:
+- domains MUST be a list (default: ["gmail.com", "yahoo.com", "hotmail.com"])
+- min_age default = 20
+- max_age default = 60
+- emails MUST NOT contain spaces
+
+If any required value cannot be inferred confidently, ask ONE clarification question.
+"""
+
 
 agent = create_react_agent(llm, TOOLS, prompt=SYSTEM_MESSAGE)
 
 
 def run_agent(user_input: str, history: List[BaseMessage]) -> AIMessage:
     """Single-turn agent runner with automatic tool execution via LangGraph."""
+    print(f"[DEBUG] Running agent with input: {user_input}")
     try:
         result = agent.invoke(
             {"messages": history + [HumanMessage(content=user_input)]},
             config={"recursion_limit": 50}
         )
+
+        for m in result["messages"]:
+            print(type(m), getattr(m, "tool_calls", None))
+
+        # print(f"[DEBUG] Agent result: {result}")
         # Return the last AI message
         return result["messages"][-1]
     except Exception as e:
